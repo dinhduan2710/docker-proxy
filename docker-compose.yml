@@ -1,0 +1,153 @@
+# Mark Shust's Docker Configuration for Magento
+# (https://github.com/markshust/docker-magento)
+#
+# Version 38.0.0
+
+version: "3"
+
+services:
+  app:
+    image: markoshust/magento-nginx:1.18-7
+    #build: ./images/nginx/1.18
+    ports:
+      - 8000
+      - 8443
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.supplier.rule=Host(`supplier.localhost`)"
+      - "traefik.http.routers.supplier.entrypoints=web"
+      - "traefik.http.services.supplier.loadbalancer.server.port=8443"
+      - "traefik.docker.network=proxy"
+    links:
+      - db
+      - phpfpm
+    volumes: &appvolumes
+      - ./composer:/var/www/.composer:cached
+      - ./src:/var/www/html
+      - sockdata:/sock
+      - ./ssldata:/etc/nginx/certs
+      - ./nginx:/etc/nginx/conf.d
+    networks:
+      - proxy
+      - internal
+
+  phpfpm:
+    image: markoshust/magento-php:8.1-fpm
+    links:
+      - db
+      - elasticsearch
+    volumes: *appvolumes
+    networks:
+      - proxy
+      - internal
+
+  db:
+    image: percona:5.7
+    command: --max_allowed_packet=64M
+    ports:
+      - 3306
+    env_file: env/db.env
+    volumes:
+      - ./data:/var/lib/mysql
+    networks:
+      - proxy
+      - internal
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    ports:
+      - 80
+    links:
+      - db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dbsupplier.rule=Host(`dbsupplier.localhost`)"
+      - "traefik.http.routers.dbsupplier.entrypoints=web"
+      - "traefik.http.services.dbsupplier.loadbalancer.server.port=80"
+      - "traefik.docker.network=proxy"
+    networks:
+      - proxy
+      - internal
+
+  redis:
+    image: redis:5.0-alpine
+    networks:
+      - proxy
+      - internal
+
+  elasticsearch:
+    image: markoshust/magento-elasticsearch:8.4-develop
+    ports:
+      - 9200
+      - 9300
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.supplierp1elastic.rule=Host(`search.supplier.localhost`)"
+      - "traefik.http.routers.supplierp1elastic.entrypoints=web"
+      - "traefik.http.services.supplierp1elastic.loadbalancer.server.port=9200"
+      - "traefik.docker.network=proxy"
+    environment:
+      - "discovery.type=single-node"
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    networks:
+      - proxy
+      - internal
+
+  rabbitmq:
+    image: rabbitmq:3.11-management
+    ports:
+      - 15672
+      - 5672
+    volumes:
+      - rabbitmqdatasupplier:/var/lib/rabbitmq
+    labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.supplierrabbit.rule=Host(`rabbit.supplier.localhost`)"
+        - "traefik.http.routers.supplierrabbit.entrypoints=web"
+        - "traefik.http.services.supplierrabbit.loadbalancer.server.port=15672"
+        - "traefik.docker.network=proxy"
+    networks:
+        - proxy
+        - internal
+
+  mailhog:
+      image: mailhog/mailhog
+      container_name: 'mailhog.supplier.localhost'
+      logging:
+        driver: 'none'  # disable saving logs
+      ports:
+        - 1025
+        - 8025
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.suppliermail.rule=Host(`mailhog.supplier.localhost`)"
+        - "traefik.http.routers.suppliermail.entrypoints=web"
+        - "traefik.http.services.suppliermail.loadbalancer.server.port=8025"
+        - "traefik.docker.network=proxy"
+      networks:
+        - proxy
+        - internal
+
+  ## Disabling cron by default as it uses higher CPU, enable if needed
+  #cron:
+  #  image: markoshust/magento-php:8.1-fpm-develop
+  #  user: root
+  #  command: /usr/local/bin/cronstart
+  #  tty: true
+  #  links:
+  #    - db
+  #  volumes: *appvolumes
+
+volumes:
+  appdata:
+  dbdata:
+  rabbitmqdatasupplier:
+  sockdata:
+  ssldata:
+
+networks:
+  proxy:
+    external:
+      name: proxy
+  internal:
+    driver: bridge
